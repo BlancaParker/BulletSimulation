@@ -1,0 +1,328 @@
+---
+title: "Some Probability Considerations"
+author: Heike Hofmann
+format: pdf
+---
+
+```{r include = FALSE, warning = FALSE, message=FALSE}
+library(tidyverse)
+library(patchwork)
+theme_set(theme_bw())
+knitr::opts_chunk$set(echo = F, 
+                      eval = T, 
+                      fig.path="./figures/", # figures are created on the fly, images are pictures like the stimuli
+                      fig.env="figure*", 
+                      fig.align = "center",
+                      out.width = "50%",
+                      fig.width = 5,
+                      fig.height = 5,
+                      dpi = 72, # we can set the resolution up to 300 later.
+                      cache = F) 
+```
+
+We have: 
+
+1. a density $ds$ for scores from comparing pairs of evidence from different sources with associated distribution $F_{ds}$
+2. a density $ss$ for scores from comparing pairs of evidence from the same source with associated distribution $F_{ss}$
+
+We assume (for now) that each of these distributions comes from the family of Beta distributions. 
+
+```{r definitions}
+ds_alpha <- 3
+ds_beta <- 15
+# 
+ss_alpha <- 5
+ss_beta <- 2
+
+
+ds_sample <- function(n) {
+  rbeta(n, shape1 = ds_alpha, shape2 = ds_beta)
+}
+
+ss_sample <- function(n) {
+  rbeta(n, shape1 = ss_alpha, shape2 = ss_beta)
+}
+
+ds_density <- function(x = seq(0,1,length=101)) {
+  # density of the different source distribution of scores
+  dbeta(x, shape1 = ds_alpha, shape2 = ds_beta)
+}
+
+ss_density <- function(x = seq(0,1,length=101)) {
+  dbeta(x, shape1 = ss_alpha, shape2 = ss_beta)
+}
+
+ds_prob <- function(x, greater=FALSE) {
+  # P(X <= x) if greater is FALSE
+  # P(X > x) if greater is TRUE
+  pbeta(x, shape1 = ds_alpha, shape2 = ds_beta, lower.tail = !greater)
+}
+
+ss_prob <- function(x, greater=FALSE) {
+  pbeta(x, shape1 = ss_alpha, shape2 = ss_beta, lower.tail = !greater)
+}
+
+ds_max_n_density <- function(x = seq(0,1,length=101), n) {
+  n*ds_prob(x)^(n-1)*ds_density(x)
+}
+
+ds_kth_n_density <- function(x = seq(0,1,length=101), k, n) {
+  prob <- ds_prob(x)
+  ds_density(x)*n*dbinom(k-1, size=n-1, prob=prob) 
+}
+
+ds_kth_n_prob <- function(x, k, n, greater=FALSE) {
+  1 - pbinom(k-1,size= n, prob=ds_prob(x, greater=FALSE), lower.tail = !greater)
+}
+
+# inverse sampling scheme
+inv_sample <- function(n, distribution) {
+  # distribution is a list of vectors X and F_X 
+  # we sample from a uniform distribution and return X corresponding to F_X
+  u <- runif(n)
+  approx(x=distribution[[2]], y=distribution[[1]], xout=u, ties = "ordered")$y
+}
+```
+
+
+```{r dataframe, dependson='definitions'}
+densities_data <- data.frame(
+  x = seq(0,1,length=1001)
+) %>% mutate(
+  ss = ss_density(x),
+  ds = ds_density(x),
+  ds_max = ds_max_n_density(x, n=999),
+  ds_90 = ds_kth_n_density(x, 90, 99),
+  ds_990 = ds_kth_n_density(x, 990, 999),
+  ds_9990 = ds_kth_n_density(x, 9990, 9999)
+)
+```
+
+```{r warning=FALSE, dependson='dataframe'}
+#| label: fig-densities
+#| fig-cap: Densities (top) and likelihood ratios (bottom) of the scores of Same-source and Different-source comparisons. 
+#| fig-height: 5
+#| out-width: 80%
+
+gg_dens <- densities_data %>% 
+  filter(ds < 10) %>% 
+  ggplot(aes(x = x)) + 
+  geom_polygon(aes(y = ss, fill="Same Source"), alpha = 0.8) + 
+  geom_polygon(aes(y = ds, fill="Different Source"), alpha = 0.8) +
+  scale_fill_manual("Densities", values=c("darkorange", "steelblue")) +
+  theme(legend.position = "top") 
+
+gg_lr <- densities_data %>% 
+  ggplot(aes(x = x)) + 
+  geom_hline(yintercept = 0, colour = "grey70") + 
+  geom_vline(aes(xintercept=x, colour = log10(ss/ds))) +
+  geom_line(aes(y = log10(ss/ds)), alpha = 0.5) +
+  scale_colour_gradient2(low="darkorange", high="steelblue", mid = "grey", midpoint = 0,
+                         na.value = NA)+
+  theme(legend.position = "bottom") + 
+  ggtitle ("(Log) likelihood-ratios")
+
+gg_dens/gg_lr + plot_layout(heights = c(3,1))
+```
+
+We are interested in the order statistics of samples from each one of these distributions. 
+
+Let us assume, that $N$ is the number of samples we draw from $F_{ds}$:
+
+```{r dependson='dataframe'}
+#| label: fig-sample
+#| fig-cap: Ten replicates with 999 samples from the different source density (left) and one sample each from the same-source density (right)
+#| fig-subcap: 
+#|   - Different Source
+#|   - Same Source
+#| out-width: 50%
+#| layout-nrow: 1
+gg_ds <- densities_data %>% 
+  ggplot(aes(x = x)) + 
+  geom_polygon(aes(y = ds), alpha = 0.8) + 
+  xlim(c(0,1)) +
+  ggtitle("Different Source")
+
+gg_ss <- densities_data %>% 
+  ggplot(aes(x = x)) + 
+  geom_polygon(aes(y = ss), alpha = 0.8) + 
+  xlim(c(0,1)) +
+  ggtitle("Same Source")
+
+N <- 100000
+ds_samples <-  data.frame(Replicate=rep(1:10, each=N), Sample=ds_sample(N*10)) 
+
+gg_samples_ds <- ds_samples %>% 
+  ggplot(aes(x = Sample, y = Replicate)) + 
+  geom_jitter(height = .25) +
+  xlim(c(0,1)) +
+  scale_y_continuous(breaks=1:10)
+
+ss_samples <- data.frame(Replicate=1:10, Sample = ss_sample(10)) 
+
+
+gg_samples_ss <- ss_samples %>% 
+  ggplot(aes(x = Sample, y = Replicate)) + geom_point() +
+  xlim(c(0,1)) +
+  scale_y_continuous(breaks=1:10)
+
+
+ds <- (gg_ds/gg_samples_ds)  + plot_layout(heights = c(1,3))
+ss <- (gg_ss/gg_samples_ss) + plot_layout(heights = c(1,3))
+ds
+ss
+```
+
+We know that for a value of $\theta \in [0,1]$, the probability  
+
+   - $P(SS \le \theta) = F_{ss}(\theta)$ is the probability that a (single) same source value is below $\theta$. If $\theta$ is the value that we use to separate between decisions, this probability becomes the **false negative probability/rate** (FNR)
+  - $P(DS > \theta) = 1- F_{ds}(\theta)$, the probability that a (single) different source value is above $\theta$. If we use $\theta$ to separate between a same-source and a different-source decision, this probability becomes the **false positive probability/rate** (FPR)
+
+
+
+We are interested in the following quantities and distributions: 
+    
+1. What is $F_\text{DS}^{(N)}(x)$, the distribution of the maximum value in a DS sample of size $N$?
+
+
+
+Let $d_1, ..., d_N \sim F_{ds}$ i.i.d., we are interested in the distribution of $y := max_i {d_i}$.
+
+We know that:
+
+$$
+\begin{eqnarray*}
+P(Y \le y) &=& P(\max_i \{D_1, ..., D_n\} \le y) \stackrel{ind.}{=} \Pi_{i=1}^N P(D_i \le y) =  \left(F_{ds} (y)\right)^N.
+\end{eqnarray*}
+$$
+
+The maximums distribution shifts the density of the different source (as shown in @fig-densities) to the right as seen in @fig-densities-screening. This affects the likelihood ratio - searching for the closest match in a database of size $N$ also increases the probability of a false positive match. The maximums distribution is the distribution of the closest non-match in a database of size $N$.
+
+```{r warning=FALSE, dependson='dataframe'}
+#| label: fig-densities-screening
+#| fig-cap: Densities of the scores of Same-source and Different-source comparisons change considerably when we screen a database. 
+#| fig-height: 5
+#| out-width: 80%
+gg_dens <- densities_data %>% 
+  ggplot(aes(x = x)) + 
+  geom_polygon(aes(y = ds, fill="Different Source", alpha = "Different Source")) +
+  geom_polygon(aes(y = ss, fill="Same Source", alpha ="Same Source")) + 
+  geom_polygon(aes(y = ds_max, fill="Max of 999 DS", alpha ="Max of 999 DS")) +
+  scale_fill_manual("Densities", values=c("darkorange", "darkorange", "steelblue")) +
+  scale_alpha_manual("Densities", values=c(0.25, 0.8, 0.8)) +
+  theme(legend.position = "top") + xlim(c(0,1)) 
+
+
+gg_dens
+```
+
+2. What is $F_\text{DS}^{(k)} (x)$, the distribution of the $k$th value in a DS sample of size $N$?
+
+Let $d_1, ..., d_N \sim F_{ds}$ i.i.d., we are interested in the distribution of $y := d_{(k)}$ (the notation with parentheses assumes that samples are ordered from smallest to largest, i.e. $d_{(1)}$ corresponds to the random variable with the minimal value among $N$ samples, and $d_{(N)}$ is the random variable of the maximum, that we looked into above).
+
+What is the distribution of $y$? $F_Y = P(Y \le y)$ is the probability that the $k$th value of a sample of size $N$ is less than or equal to $y$. 
+That means that at least $k$ values among $N$ are at most as large as $y$. The probability that exactly $k$ values among $N$ are at most as large as $y$ is given as: 
+
+$$
+{N \choose k} P(\{D_{j_1}, ..., D_{j_{k}}\} \le y) P(\{D_{j_k}, ..., D_{j_{N}}\} \ge y) = {N \choose k}  F_{ds}^{k}(y)(1-F_{ds}(y))^{N-k}.
+$$
+This makes the distribution $F_Y$: 
+
+$$
+\begin{eqnarray*}
+F_\text{ds}^{(k)}(y) &=& F_{Y}(y) = P(Y \le y) = \sum_{j = k}^{N} {N \choose j} F_{ds}^{j}(y)(1-F_{ds}(y))^{N-j} = \\
+&=& 1 - \text{Bin}_{N, F_{ds}(y)} (k-1).
+\end{eqnarray*}
+$$
+The density $f_Y$ has the following form:
+
+$$
+f_{ds}^{(k)} (y) = \frac{N!}{(k-1)!(N-k)!} \cdot f_{ds}(y) \cdot F_{ds}^{k-1} (y) \cdot (1 - F_{ds}(y))^{N-k}.
+$$
+It's basic but pretty nasty calculus to get to this density. We start by finding the derivative of $F_{ds}^{(k)}(y)$:
+
+
+$$
+\begin{alignedat}{3}
+ f_\text{ds}^{(k)}(y)   &= \frac{d}{dy} F_\text{ds}^{(k)}(y)  \\
+    &=  \sum_{j = k}^{N} {N \choose j} && j F_{ds}^{j-1}(y) f_{ds}(y)(1-F_{ds}(y))^{N-j} + \\
+   & \ \ \ \ \sum_{j = k}^{N} {N \choose j} && F_{ds}^{j}(y)(N-j)(1-F_{ds}(y))^{N-j-1}(-1)f_{ds}(y) = * \\
+\end{alignedat}
+$$
+
+The following properties of the binomial coefficient hold:
+
+$$
+\begin{alignedat}{3}
+{N \choose j} j &=& N {N-1 \choose j-1}  \ \ \ \ \  \   & \text{ for } 1 \le j \le N\\
+{N \choose j} (N-j)  &=& N {N-1 \choose j}  \ \ \ \ \  \ & \text{ for } 1 \le j \le N-1\\
+\end{alignedat}
+$$
+
+Using these properties in (*) whenever appropriate, we get: 
+
+$$
+\begin{alignedat}{3}
+ *  &=  f_{ds}(y) \cdot N \cdot \sum_{j = k}^{N} {N-1 \choose j-1}  F_{ds}^{j-1}(y) (1-F_{ds}(y))^{N-j} \ \ - \\
+   & \ \ \ \ f_{ds}(y) \cdot N \cdot \underbrace{\sum_{j = k}^{N-1} {N-1 \choose j}  F_{ds}^{j}(y)(1-F_{ds}(y))^{N-1-j}}_{1 - \text{Bin}_{N-1,F_{ds}(y)}(k-1)} =  \\
+  &=  f_{ds}(y) \cdot N \cdot \underbrace{\sum_{s = k-1}^{N-1} {N-1 \choose s}  F_{ds}^{s}(y) (1-F_{ds}(y))^{N-1-s}}_{1 - \text{Bin}_{N-1,F_{ds}(y)}(k-2)} \ \ - \\
+   & \ \ \ \ f_{ds}(y) \cdot N \cdot \left( 1 - \text{Bin}_{N-1,F_{ds}(y)}(k-1) \right) = \\
+&=  f_{ds}(y) \cdot N \cdot \left[\left(1 - \text{Bin}_{N-1,F_{ds}(y)}(k-2)\right) -  \left( 1 - \text{Bin}_{N-1,F_{ds}(y)}(k-1) \right) \right] = \\
+&=  f_{ds}(y) \cdot N \cdot {N-1 \choose k-1} F_{ds}^{k-1} (y) \cdot (1 - F_{ds}(y))^{N-k}.
+\end{alignedat}
+$$
+
+This shows the above statement.
+
+```{r dependson='dataframe'}
+#| label: fig-densities-topk
+#| fig-cap: Densities of Same-source and Different-source and top ten
+#| fig-height: 5
+#| out-width: 80%
+gg_dens <- densities_data %>% 
+  ggplot(aes(x = x)) + 
+  geom_polygon(aes(y = ds, fill="Different Source", alpha = "Different Source")) +
+  geom_polygon(aes(y = ss, fill="Same Source", alpha ="Same Source")) + 
+  geom_polygon(aes(y = ds_90, fill="90th (N=100)", alpha ="90th (N=100)")) +
+  geom_polygon(aes(y = ds_990, fill="990th (N=1,000)", alpha ="990th (N=1,000)")) +
+  geom_polygon(aes(y = ds_9990, fill="9,990th (N=10,000)", alpha ="9,990th (N=10,000)")) +
+    scale_fill_manual("Densities", values=rev(c("steelblue", "darkorange", "#f39c12","#f5b041", "#d68910"))) +
+  scale_alpha_manual("Densities", values=rev(c(0.8, 0.25,  0.8, 0.8, 0.8))) +
+  theme(legend.position = "top") + xlim(c(0,1)) 
+
+
+gg_dens
+```
+    
+3. What is the probability that a same source comparison (with score $s$) is in the top $k$ of a DS sample of size $N$? How does this probability change with increasing sample size $N$?
+
+We can simulate the distribution for this situation by drawing one sample $s$ from the same source distribution $F_{ss}$ and one sample $d$ from $F_{ds}^{(N-k+1)}$, the order statistic corresponding to the top $k$th value in a sample of size $N$. 
+We compare the size of the values - when $s$ is larger than $d$, the same source image is in the top $k$, otherwise it is not. Repeating this sampling a larger number of times $B$ allows us to get an estimate of the corresponding probability. 
+
+```{r warning = FALSE}
+#| label: fig-in-top-k
+#| fig-cap: "Probability that (a single) same source result is in the top k results of a data base search. N is the number of search items considered (generally defined by the size of the data base). Each search combination was simulated five times to allow for an assessment of the simulation variability. Here, each of the probabilities is based on a sample of size 10,000, which keeps the simulation variability low except in extreme distributional assumptions for same-source and different-source densities."
+dframe <- data.frame(expand.grid(N = round(10^((4:12)/2)), rep=1:5, top=10^(0:2), B=10^4))
+
+dframe <- dframe %>% mutate(
+  prob = purrr::pmap_dbl(.l=list(N, top, B), .f = function(.N, .top, .B) {
+    x = seq(0,1,length=1001)
+    score_ds_990 <- inv_sample(
+      .B, 
+      distribution = list(x, 
+                          y = ds_kth_n_prob(x, .N-.top+1, .N)))
+    score_ss <- ss_sample(.B)
+    mean(score_ss > score_ds_990)
+  })
+)
+
+dframe %>% 
+  ggplot(aes(x = N, y=prob, colour = factor(top), shape=factor(top))) +
+  geom_point(size=3, alpha = 0.8) + 
+  scale_x_log10(breaks = 10^(2:6), labels=c("100", "1,000", "10,000", "100,000", "1 Mio")) +
+  ggtitle("Probability that same source\nis among the top X results") +
+  ylab("Probability") +
+  scale_color_brewer("Top k results", palette = "Dark2") +
+  scale_shape_discrete("Top k results")
+
+```
