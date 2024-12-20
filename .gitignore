@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+.*_files
+*.tex
+*.log
+*.aux
+figures/
+*.rmarkdown
